@@ -1,0 +1,38 @@
+[Unit]
+Description=GeneTrader Adaptive Optimization Daemon
+Documentation=https://github.com/imsatoshi/GeneTrader
+After=network.target freqtrade.service
+Wants=freqtrade.service
+
+[Service]
+Type=simple
+User=root
+Group=root
+WorkingDirectory=/home/user/GeneTrader
+Environment="PYTHONPATH=/home/user/GeneTrader"
+Environment="GENETRADER_CONFIG=/home/user/GeneTrader/ga.json"
+
+# Main command
+ExecStart=/usr/bin/python3 /home/user/GeneTrader/scripts/genetrader_daemon.py \
+    --config /home/user/GeneTrader/ga.json \
+    --strategy GeneTrader \
+    --check-interval 300 \
+    --optimize-interval 259200
+
+# Restart settings
+Restart=always
+RestartSec=30
+StartLimitInterval=300
+StartLimitBurst=5
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=genetrader
+
+# Resource limits
+MemoryMax=2G
+CPUQuota=80%
+
+[Install]
+WantedBy=multi-user.target
