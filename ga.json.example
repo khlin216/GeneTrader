@@ -31,6 +31,20 @@
     "diversity_threshold": 0.1,
     "max_mutation_prob": 0.4,
 
+    "_comment_anti_overfit": "Anti-overfitting settings (critical for live trading success)",
+    "enable_walk_forward": true,
+    "walk_forward_method": "rolling",
+    "walk_forward_train_weeks": 26,
+    "walk_forward_test_weeks": 4,
+    "walk_forward_min_train_weeks": 12,
+    "total_data_weeks": 52,
+    "min_trades_per_week": 0.5,
+    "max_drawdown_limit": 0.35,
+    "min_profit_factor": 1.0,
+    "min_win_rate": 0.30,
+    "enable_diversity_selection": true,
+    "diversity_selection_weight": 0.3,
+
     "_comment_optimizer": "Optimizer settings - choose 'genetic' or 'optuna'",
     "optimizer_type": "genetic",
 

@@ -156,3 +156,183 @@ def select_tournament(population: List[Individual], tournament_size: int) -> Ind
     tournament = random.sample(population, tournament_size)
 
     return max(tournament, key=lambda ind: ind.fitness if ind.fitness is not None else float('-inf'))
+
+
+def calculate_genetic_distance(ind1: Individual, ind2: Individual) -> float:
+    """
+    Calculate genetic distance between two individuals.
+
+    Uses normalized Euclidean distance for numeric genes and
+    Hamming distance for categorical genes.
+
+    Args:
+        ind1: First individual
+        ind2: Second individual
+
+    Returns:
+        Distance value between 0 (identical) and 1 (maximum difference)
+    """
+    if len(ind1.genes) != len(ind2.genes):
+        return 1.0  # Maximum distance for incompatible individuals
+
+    total_distance = 0.0
+    num_genes = len(ind1.genes)
+
+    for i, (g1, g2) in enumerate(zip(ind1.genes, ind2.genes)):
+        param_type = ind1.param_types[i] if i < len(ind1.param_types) else None
+
+        if isinstance(g1, bool) and isinstance(g2, bool):
+            # Boolean: 0 if same, 1 if different
+            total_distance += 0.0 if g1 == g2 else 1.0
+
+        elif isinstance(g1, (int, float)) and isinstance(g2, (int, float)):
+            # Numeric: normalized distance
+            if isinstance(param_type, dict):
+                start = param_type.get('start', 0)
+                end = param_type.get('end', 100)
+                range_size = max(end - start, 1)
+                total_distance += abs(g1 - g2) / range_size
+            else:
+                # Fallback for unknown ranges
+                max_val = max(abs(g1), abs(g2), 1)
+                total_distance += abs(g1 - g2) / max_val
+
+        else:
+            # Categorical or other: 0 if same, 1 if different
+            total_distance += 0.0 if g1 == g2 else 1.0
+
+    return total_distance / num_genes
+
+
+def calculate_population_diversity(population: List[Individual]) -> float:
+    """
+    Calculate average diversity of a population.
+
+    Higher values indicate more diverse population.
+
+    Args:
+        population: List of individuals
+
+    Returns:
+        Average pairwise genetic distance (0 to 1)
+    """
+    if len(population) < 2:
+        return 0.0
+
+    total_distance = 0.0
+    num_pairs = 0
+
+    # Sample pairs for efficiency if population is large
+    sample_size = min(len(population), 20)
+    sample = random.sample(population, sample_size)
+
+    for i in range(len(sample)):
+        for j in range(i + 1, len(sample)):
+            total_distance += calculate_genetic_distance(sample[i], sample[j])
+            num_pairs += 1
+
+    return total_distance / num_pairs if num_pairs > 0 else 0.0
+
+
+def select_with_diversity(
+    population: List[Individual],
+    tournament_size: int,
+    diversity_weight: float = 0.3,
+    reference_individual: Individual = None
+) -> Individual:
+    """
+    Select individual considering both fitness and diversity.
+
+    This selection method helps prevent premature convergence by
+    favoring individuals that are both fit AND different from
+    existing selections.
+
+    Args:
+        population: List of individuals to select from
+        tournament_size: Number of individuals in tournament
+        diversity_weight: Weight for diversity (0 to 1, default 0.3)
+        reference_individual: Individual to measure diversity against
+
+    Returns:
+        Selected individual balancing fitness and diversity
+    """
+    if not population:
+        raise ValueError("Cannot select from empty population")
+
+    tournament_size = min(tournament_size, len(population))
+    tournament = random.sample(population, tournament_size)
+
+    def combined_score(ind: Individual) -> float:
+        fitness = ind.fitness if ind.fitness is not None else float('-inf')
+
+        if reference_individual is None or diversity_weight <= 0:
+            return fitness
+
+        # Calculate diversity from reference
+        distance = calculate_genetic_distance(ind, reference_individual)
+
+        # Normalize fitness to [0, 1] range for combination
+        max_fitness = max(
+            (i.fitness for i in tournament if i.fitness is not None),
+            default=1.0
+        )
+        min_fitness = min(
+            (i.fitness for i in tournament if i.fitness is not None),
+            default=0.0
+        )
+        fitness_range = max_fitness - min_fitness if max_fitness > min_fitness else 1.0
+        normalized_fitness = (fitness - min_fitness) / fitness_range
+
+        # Combined score: fitness + diversity bonus
+        return (1 - diversity_weight) * normalized_fitness + diversity_weight * distance
+
+    return max(tournament, key=combined_score)
+
+
+def maintain_diversity(
+    population: List[Individual],
+    min_diversity: float = 0.1,
+    mutation_boost: float = 0.3
+) -> int:
+    """
+    Maintain population diversity by mutating similar individuals.
+
+    When population diversity drops below threshold, this function
+    applies additional mutations to restore diversity.
+
+    Args:
+        population: List of individuals (modified in place)
+        min_diversity: Minimum diversity threshold
+        mutation_boost: Additional mutation rate for similar individuals
+
+    Returns:
+        Number of individuals that were mutated
+    """
+    current_diversity = calculate_population_diversity(population)
+
+    if current_diversity >= min_diversity:
+        return 0
+
+    # Find pairs of very similar individuals
+    mutations_applied = 0
+
+    for i in range(len(population)):
+        for j in range(i + 1, len(population)):
+            distance = calculate_genetic_distance(population[i], population[j])
+
+            # If very similar, mutate the less fit one
+            if distance < min_diversity / 2:
+                target_idx = i if (
+                    population[i].fitness is None or
+                    (population[j].fitness is not None and
+                     population[j].fitness > population[i].fitness)
+                ) else j
+
+                mutate(population[target_idx], mutation_boost)
+                mutations_applied += 1
+
+                # Limit mutations per pass
+                if mutations_applied >= len(population) // 4:
+                    return mutations_applied
+
+    return mutations_applied

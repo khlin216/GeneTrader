@@ -177,25 +177,28 @@ def parse_backtest_results(file_path: str) -> Dict[str, Any]:
     return parsed_result
 
 def fitness_function(parsed_result: Dict[str, Any], generation: int,
-                     strategy_name: str, timeframe: str) -> float:
+                     strategy_name: str, timeframe: str,
+                     num_parameters: int = 0,
+                     backtest_weeks: int = 30) -> float:
     """Calculate fitness score for a trading strategy based on backtest results.
 
-    The fitness function combines multiple metrics to evaluate strategy quality:
-    - Profit component (using tanh transformation)
-    - Win rate component (using sigmoid transformation)
-    - Risk-adjusted returns (Sharpe, Sortino, profit factor)
-    - Drawdown penalty (exponential decay)
-    - Trade frequency score (prefers 2-5 trades/day)
-    - Trade duration score (prefers trades between 2 hours and 2 days)
+    This fitness function is designed to PREVENT OVERFITTING by:
+    1. Requiring minimum trade counts for statistical significance
+    2. Penalizing excessive drawdown (>35% = disqualified)
+    3. Requiring minimum profit factor (>=1.0) and win rate (>=30%)
+    4. Including complexity penalty for too many parameters
+    5. Balancing profit with risk-adjusted metrics
 
     Args:
         parsed_result: Dictionary of parsed backtest metrics
         generation: Current generation number
         strategy_name: Name of the strategy being evaluated
         timeframe: Trading timeframe (e.g., "1h", "4h")
+        num_parameters: Number of strategy parameters (for complexity penalty)
+        backtest_weeks: Number of weeks in backtest period
 
     Returns:
-        Fitness score as a float (higher is better)
+        Fitness score as a float (higher is better, negative = disqualified)
     """
     # Extract relevant metrics
     total_profit_percent = parsed_result['total_profit_percent']
@@ -206,41 +209,87 @@ def fitness_function(parsed_result: Dict[str, Any], generation: int,
     profit_factor = parsed_result['profit_factor']
     daily_avg_trades = parsed_result['daily_avg_trades']
     avg_trade_duration = parsed_result['avg_trade_duration']
+    total_trades = parsed_result['total_trades']
 
-    # 1. Profit component (non-linear transformation with better scaling)
-    profit_score = math.tanh(total_profit_percent / 2.0)  # 放宽收益区间
+    # =========================================
+    # DISQUALIFICATION CHECKS (Anti-Overfitting)
+    # =========================================
 
-    # 2. Win rate component (more reasonable target)
-    win_rate_score = 1 / (1 + math.exp(-10 * (win_rate - 0.9)))  
+    # 1. Minimum trade count for statistical significance
+    min_trades = max(backtest_weeks // 2, 15)
+    if total_trades < min_trades:
+        logger.warning(f"Strategy {strategy_name}: Insufficient trades ({total_trades} < {min_trades})")
+        return -1.0
 
-    # 3. Risk-adjusted returns (combining multiple metrics)
+    # 2. Maximum drawdown limit (>35% = too risky)
+    if max_drawdown > 0.35:
+        logger.warning(f"Strategy {strategy_name}: Excessive drawdown ({max_drawdown:.1%} > 35%)")
+        return -2.0
+
+    # 3. Minimum profit factor (must be profitable on average)
+    if profit_factor < 1.0:
+        logger.warning(f"Strategy {strategy_name}: Unprofitable (PF={profit_factor:.2f} < 1.0)")
+        return -3.0
+
+    # 4. Minimum win rate (avoid extreme strategies)
+    if win_rate < 0.30:
+        logger.warning(f"Strategy {strategy_name}: Win rate too low ({win_rate:.1%} < 30%)")
+        return -4.0
+
+    # =========================================
+    # COMPONENT SCORES
+    # =========================================
+
+    # 1. Profit component (smooth transformation)
+    profit_score = math.tanh(total_profit_percent / 2.0)
+
+    # 2. Win rate component (target: 50-70% is optimal, not 90%)
+    win_rate_target = 0.55
+    win_rate_score = math.exp(-((win_rate - win_rate_target) ** 2) / 0.08)
+
+    # 3. Risk-adjusted returns (critical for avoiding overfitting)
+    sharpe_component = math.tanh(sharpe_ratio / 2) if sharpe_ratio > 0 else -0.5
+    sortino_component = math.tanh(sortino_ratio / 2) if sortino_ratio > 0 else -0.5
+    pf_component = math.tanh((profit_factor - 1) / 2) if profit_factor > 1 else -0.5
+
     risk_adjusted_score = (
-        math.tanh(sharpe_ratio / 2) * 0.4 +  # Sharpe ratio
-        math.tanh(sortino_ratio / 2) * 0.4 +  # Sortino ratio
-        math.tanh(profit_factor / 3) * 0.2    # Profit factor
+        sharpe_component * 0.4 +
+        sortino_component * 0.4 +
+        pf_component * 0.2
     )
 
-    # 4. Drawdown penalty (exponential with smoother curve)
-    drawdown_penalty = math.exp(-3 * max_drawdown)  # 低惩罚程度
+    # 4. Drawdown penalty (exponential decay)
+    drawdown_penalty = math.exp(-3 * max_drawdown)
 
-    # 5. Trade frequency score (prefer 2-5 trades per day)
-    trade_frequency_score = math.exp(-((daily_avg_trades - 3.5)**2) / 8)
+    # 5. Trade frequency score (prefer 1-4 trades per day)
+    optimal_trades = 2.0
+    trade_frequency_score = math.exp(-((daily_avg_trades - optimal_trades) ** 2) / 8)
 
-    # 6. Trade duration score (prefer trades between 2 hours and 2 days)
+    # 6. Trade duration score
     optimal_duration = 720  # 12 hours in minutes
-    duration_score = math.exp(-((avg_trade_duration - optimal_duration)**2) / (2 * optimal_duration**2))
+    duration_score = math.exp(-((avg_trade_duration - optimal_duration) ** 2) / (2 * optimal_duration ** 2))
 
-    # Combine all components with balanced weights
+    # 7. Complexity penalty (penalize too many parameters)
+    if num_parameters > 0:
+        complexity_penalty = math.exp(-0.1 * max(0, num_parameters - 5))
+    else:
+        complexity_penalty = 1.0
+
+    # 8. Statistical significance bonus
+    trade_confidence = min(1.0, 0.5 + 0.5 * (total_trades - min_trades) / max(1, 100 - min_trades))
+
+    # =========================================
+    # COMBINED FITNESS (Balanced Weights)
+    # =========================================
     fitness = (
-        profit_score * win_rate_score         # 保持较高权重因为这是主要目标
-
-        # profit_score * 0.30 +           # 保持较高权重因为这是主要目标
-        # win_rate_score * 0.15 +         # 略微降低胜率权重
-        # risk_adjusted_score * 0.25 +    # 提高风险调整后收益的权重
-        # drawdown_penalty * 0.15 +       # 保持适度的回撤惩罚
-        # trade_frequency_score * 0.10 +  # 交易频率作为次要因素
-        # duration_score * 0.05           # 持续时间作为辅助指标
-    )
+        profit_score * 0.25 +           # Profit is important but not dominant
+        win_rate_score * 0.10 +         # Reasonable win rate
+        risk_adjusted_score * 0.25 +    # Risk-adjusted returns are critical
+        drawdown_penalty * 0.15 +       # Penalize high drawdown
+        trade_frequency_score * 0.10 +  # Reasonable trading frequency
+        duration_score * 0.05 +         # Trade duration as minor factor
+        trade_confidence * 0.10         # Statistical significance
+    ) * complexity_penalty
 
     # Log the fitness components and final score
     log_message = (f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] "
@@ -254,6 +303,8 @@ def fitness_function(parsed_result: Dict[str, Any], generation: int,
                    f"Max Drawdown: {max_drawdown:.4f}, Drawdown Penalty: {drawdown_penalty:.4f}, "
                    f"Daily Avg Trades: {daily_avg_trades:.2f}, Trade Frequency Score: {trade_frequency_score:.4f}, "
                    f"Avg Trade Duration (min): {avg_trade_duration:.2f}, Duration Score: {duration_score:.4f}, "
+                   f"Total Trades: {int(total_trades)}, Trade Confidence: {trade_confidence:.4f}, "
+                   f"Complexity Penalty: {complexity_penalty:.4f}, "
                    f"Final Fitness: {fitness:.4f}")
 
     # Write to log file
