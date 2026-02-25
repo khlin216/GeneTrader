@@ -54,23 +54,37 @@ def render_strategy(params: list, strategy_name: str) -> str:
     rendered_strategy = strategy_template.substitute(strategy_params)
     return rendered_strategy
 
-def run_backtest(genes: list, trading_pairs: list, generation: int) -> float:
+def run_backtest(genes: list, trading_pairs: list, generation: int,
+                 custom_timerange: str = None, num_parameters: int = 0) -> float:
+    """
+    Run a backtest for a strategy with given parameters.
+
+    Args:
+        genes: List of gene values for strategy parameters
+        trading_pairs: List of trading pairs to use
+        generation: Current generation number
+        custom_timerange: Optional custom timerange (for walk-forward validation)
+        num_parameters: Number of parameters (for complexity penalty)
+
+    Returns:
+        Fitness score for the strategy
+    """
     timestamp = int(time.time())
     random_id = random.randint(1000, 9999)
     strategy_name = f"GeneTrader_gen{generation}_{timestamp}_{random_id}"
     strategy_file = f"{settings.strategy_dir}/{strategy_name}.py"
-    
+
     # Render new strategy file
     logger.info(f"Rendering strategy for generation {generation}")
 
     rendered_strategy = render_strategy(genes, strategy_name)
     with open(strategy_file, 'w') as f:
         f.write(rendered_strategy)
-    
+
     max_open_trades = 1
     strategy_gene = genes.copy()
-    dynamic_timeframe = "5m" # default
-    
+    dynamic_timeframe = "5m"  # default
+
     if settings.add_dynamic_timeframes:
         dynamic_timeframe = TIMEFRAME_MAP.get(int(strategy_gene.pop()), "5m")
         logger.info(f"Setting dynamic_timeframe to {dynamic_timeframe}")
@@ -83,7 +97,7 @@ def run_backtest(genes: list, trading_pairs: list, generation: int) -> float:
     config_path = os.path.join(settings.user_dir, 'config.json')
     with open(config_path, 'r') as f:
         config = json.load(f)
-    
+
     if settings.add_max_open_trades:
         logger.info(f"Setting max_open_trades to {max_open_trades}")
         config['max_open_trades'] = max_open_trades
@@ -97,10 +111,15 @@ def run_backtest(genes: list, trading_pairs: list, generation: int) -> float:
     timeframe = config['timeframe']
     logger.info(f"Running backtest for generation {generation}")
 
-    # Calculate the start_date for the timerange
-    end_date = datetime.now()
-    start_date = end_date - timedelta(weeks=settings.backtest_timerange_weeks)
-    timerange = f"{start_date.strftime('%Y%m%d')}-"
+    # Use custom timerange if provided (for walk-forward validation)
+    if custom_timerange:
+        timerange = custom_timerange
+        logger.info(f"Using custom timerange: {timerange}")
+    else:
+        # Calculate the start_date for the timerange
+        end_date = datetime.now()
+        start_date = end_date - timedelta(weeks=settings.backtest_timerange_weeks)
+        timerange = f"{start_date.strftime('%Y%m%d')}-"
     output_file = f"{settings.results_dir}/backtest_results_gen{generation}_{timestamp}_{random_id}.txt"
     # Build command as list for safer subprocess execution
     cmd_args = [
@@ -143,11 +162,27 @@ def run_backtest(genes: list, trading_pairs: list, generation: int) -> float:
                 time.sleep(settings.retry_delay)
     
     parsed_result = parse_backtest_results(output_file)
-    
+
     if parsed_result['total_trades'] == 0:
         return float('-inf')  # Heavily penalize strategies that don't trade
-    
-    return fitness_function(parsed_result, generation, strategy_name, timeframe)  # 添加 strategy_name 参数
+
+    # Calculate backtest weeks for fitness function
+    backtest_weeks = settings.backtest_timerange_weeks
+    if custom_timerange and '-' in custom_timerange:
+        # Parse custom timerange to calculate weeks
+        try:
+            parts = custom_timerange.split('-')
+            if len(parts) >= 2 and parts[0] and parts[1]:
+                start = datetime.strptime(parts[0], '%Y%m%d')
+                end = datetime.strptime(parts[1], '%Y%m%d')
+                backtest_weeks = max(1, (end - start).days // 7)
+        except (ValueError, IndexError):
+            pass  # Use default if parsing fails
+
+    return fitness_function(
+        parsed_result, generation, strategy_name, timeframe,
+        num_parameters=num_parameters, backtest_weeks=backtest_weeks
+    )
 
 if __name__ == "__main__":
     # 测试 render_strategy 函数
