@@ -47,6 +47,18 @@ class Settings:
         'min_profit_factor': {'min': 0.0, 'type': float},
         'min_win_rate': {'min': 0.0, 'max': 1.0, 'type': float},
         'diversity_selection_weight': {'min': 0.0, 'max': 1.0, 'type': float},
+        # On-the-fly optimization settings
+        'performance_check_interval_minutes': {'min': 1, 'type': int},
+        'degradation_check_interval_minutes': {'min': 1, 'type': int},
+        'reoptimization_trigger_threshold': {'min': 0.0, 'max': 1.0, 'type': float},
+        'minimum_trades_for_evaluation': {'min': 1, 'type': int},
+        'minimum_days_between_optimizations': {'min': 0, 'type': int},
+        'recent_data_weight': {'min': 0.0, 'max': 1.0, 'type': float},
+        'metrics_window_hours': {'min': 1, 'type': int},
+        'shadow_trading_hours': {'min': 0, 'type': int},
+        'rollback_drawdown_threshold': {'min': 0.0, 'max': 1.0, 'type': float},
+        'agent_api_port': {'min': 1, 'max': 65535, 'type': int},
+        'agent_check_interval_hours': {'min': 1, 'type': int},
     }
 
     def __init__(self, config_file: str = 'ga.json'):
@@ -161,6 +173,31 @@ class Settings:
                     f"walk_forward_test_weeks ({self.walk_forward_test_weeks}) exceeds "
                     f"total_data_weeks ({self.total_data_weeks})"
                 )
+
+        # On-the-fly optimization / Adaptive optimization settings
+        self.adaptive_optimization_enabled = self.config.get('adaptive_optimization_enabled', False)
+        self.performance_check_interval_minutes = self.config.get('performance_check_interval_minutes', 5)
+        self.degradation_check_interval_minutes = self.config.get('degradation_check_interval_minutes', 60)
+        self.reoptimization_trigger_threshold = self.config.get('reoptimization_trigger_threshold', 0.3)
+        self.minimum_trades_for_evaluation = self.config.get('minimum_trades_for_evaluation', 20)
+        self.minimum_days_between_optimizations = self.config.get('minimum_days_between_optimizations', 3)
+        self.recent_data_weight = self.config.get('recent_data_weight', 0.7)
+        self.performance_db_path = self.config.get('performance_db_path', 'data/performance.db')
+        self.metrics_window_hours = self.config.get('metrics_window_hours', 168)  # 7 days
+
+        # Safe deployment settings
+        self.shadow_trading_hours = self.config.get('shadow_trading_hours', 24)
+        self.gradual_rollout_enabled = self.config.get('gradual_rollout_enabled', True)
+        self.auto_rollback_enabled = self.config.get('auto_rollback_enabled', True)
+        self.rollback_drawdown_threshold = self.config.get('rollback_drawdown_threshold', 0.15)
+
+        # Agent integration settings
+        self.agent_api_enabled = self.config.get('agent_api_enabled', False)
+        self.agent_api_host = self.config.get('agent_api_host', '0.0.0.0')
+        self.agent_api_port = self.config.get('agent_api_port', 8090)
+        self.agent_check_interval_hours = self.config.get('agent_check_interval_hours', 4)
+        self.agent_approval_required_for_deployment = self.config.get('agent_approval_required_for_deployment', True)
+        self.agent_api_key = self.config.get('agent_api_key', '')
 
         # Set proxy environment variables
         for key, value in self.config.get('proxy', {}).items():
