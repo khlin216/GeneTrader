@@ -30,13 +30,23 @@ class Settings:
         'mutation_prob': {'min': 0.0, 'max': 1.0, 'type': float},
         'tournament_size': {'min': 1, 'type': int},
         'max_retries': {'min': 1, 'type': int},
-        'retry_delay': {'min': 0, 'type': (int, float)},  # Delay in seconds
+        'retry_delay': {'min': 0, 'type': (int, float)},
         'pool_processes': {'min': 1, 'type': int},
         'num_pairs': {'min': 1, 'type': int},
         'backtest_timerange_weeks': {'min': 1, 'type': int},
         'diversity_threshold': {'min': 0.0, 'max': 1.0, 'type': float},
         'max_mutation_prob': {'min': 0.0, 'max': 1.0, 'type': float},
         'checkpoint_frequency': {'min': 1, 'type': int},
+        # Anti-overfitting settings
+        'walk_forward_train_weeks': {'min': 4, 'type': int},
+        'walk_forward_test_weeks': {'min': 1, 'type': int},
+        'walk_forward_min_train_weeks': {'min': 4, 'type': int},
+        'total_data_weeks': {'min': 8, 'type': int},
+        'min_trades_per_week': {'min': 0.0, 'type': float},
+        'max_drawdown_limit': {'min': 0.0, 'max': 1.0, 'type': float},
+        'min_profit_factor': {'min': 0.0, 'type': float},
+        'min_win_rate': {'min': 0.0, 'max': 1.0, 'type': float},
+        'diversity_selection_weight': {'min': 0.0, 'max': 1.0, 'type': float},
     }
 
     def __init__(self, config_file: str = 'ga.json'):
@@ -128,6 +138,29 @@ class Settings:
         self.optuna_n_startup_trials = self.config.get('optuna_n_startup_trials', 10)
         self.optuna_pruning = self.config.get('optuna_pruning', False)
         self.optuna_n_jobs = self.config.get('optuna_n_jobs', 1)
+
+        # Anti-overfitting settings (critical for profitable strategies)
+        self.enable_walk_forward = self.config.get('enable_walk_forward', False)
+        self.walk_forward_method = self.config.get('walk_forward_method', 'rolling')
+        self.walk_forward_train_weeks = self.config.get('walk_forward_train_weeks', 26)
+        self.walk_forward_test_weeks = self.config.get('walk_forward_test_weeks', 4)
+        self.walk_forward_min_train_weeks = self.config.get('walk_forward_min_train_weeks', 12)
+        self.total_data_weeks = self.config.get('total_data_weeks', 52)
+        self.min_trades_per_week = self.config.get('min_trades_per_week', 0.5)
+        self.max_drawdown_limit = self.config.get('max_drawdown_limit', 0.35)
+        self.min_profit_factor = self.config.get('min_profit_factor', 1.0)
+        self.min_win_rate = self.config.get('min_win_rate', 0.30)
+        self.enable_diversity_selection = self.config.get('enable_diversity_selection', True)
+        self.diversity_selection_weight = self.config.get('diversity_selection_weight', 0.3)
+
+        # Validate walk-forward settings consistency
+        if self.enable_walk_forward:
+            if self.walk_forward_train_weeks + self.walk_forward_test_weeks > self.total_data_weeks:
+                raise ConfigurationError(
+                    f"walk_forward_train_weeks ({self.walk_forward_train_weeks}) + "
+                    f"walk_forward_test_weeks ({self.walk_forward_test_weeks}) exceeds "
+                    f"total_data_weeks ({self.total_data_weeks})"
+                )
 
         # Set proxy environment variables
         for key, value in self.config.get('proxy', {}).items():
